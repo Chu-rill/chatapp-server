@@ -1,26 +1,72 @@
 import { Injectable } from '@nestjs/common';
-import { CreateChatDto } from './dto/create-chat.dto';
-import { UpdateChatDto } from './dto/update-chat.dto';
+import { PrismaService } from '../prisma/prisma.service';
 
 @Injectable()
 export class ChatService {
-  create(createChatDto: CreateChatDto) {
-    return 'This action adds a new chat';
+  private connectedUsers = new Map<string, string>(); // Maps socket IDs to usernames
+
+  constructor(private readonly prisma: PrismaService) {}
+
+  // Add a user to the connected list
+  async addUser(socketId: string, username: string): Promise<void> {
+    const user = await this.prisma.user.findUnique({ where: { username } });
+
+    if (!user) {
+      throw new Error(`User with username "${username}" does not exist.`);
+    }
+
+    this.connectedUsers.set(socketId, username);
   }
 
-  findAll() {
-    return `This action returns all chat`;
+  // Handle user disconnection
+  async handleDisconnect(socketId: string): Promise<void> {
+    this.connectedUsers.delete(socketId);
   }
 
-  findOne(id: number) {
-    return `This action returns a #${id} chat`;
+  // Get the list of active users
+  getActiveUsers(): string[] {
+    return Array.from(this.connectedUsers.values());
   }
 
-  update(id: number, updateChatDto: UpdateChatDto) {
-    return `This action updates a #${id} chat`;
+  // Save a message to the database
+  async saveMessage(sender: string, content: string) {
+    const user = await this.prisma.user.findUnique({
+      where: { username: sender },
+    });
+    if (!user) {
+      throw new Error(`User ${sender} not found`);
+    }
+
+    const message = await this.prisma.message.create({
+      data: {
+        content,
+        senderId: user.id,
+      },
+    });
+
+    return {
+      id: message.id,
+      content: message.content,
+      sender,
+      createdAt: message.createdAt,
+    };
   }
 
-  remove(id: number) {
-    return `This action removes a #${id} chat`;
+  // Retrieve chat history
+  async getChatHistory(): Promise<
+    { id: number; content: string; sender: string; createdAt: Date }[]
+  > {
+    const messages = await this.prisma.message.findMany({
+      take: 50,
+      orderBy: { createdAt: 'desc' },
+      include: { sender: true },
+    });
+
+    return messages.map((msg) => ({
+      id: msg.id,
+      content: msg.content,
+      sender: msg.sender.username,
+      createdAt: msg.createdAt,
+    }));
   }
 }
